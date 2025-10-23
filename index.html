@@ -44,12 +44,18 @@
 <body class="bg-gray-50">
     <div id="root"></div>
 
-    <!-- Carica prima la config -->
-    <script src="firebase-config.js"></script>
-    <!-- Poi il resto dell'app -->
-    <script type="text/babel">
-        const firebaseConfig = window.firebaseConfig;
-        // ... resto del codice
+    <!-- Configurazione Firebase -->
+    <script>
+        // Prova a caricare config esterna, altrimenti usa quella inline
+        window.firebaseConfig = {
+            apiKey: "AIzaSyCjorv7BM7krRsqeoozt1mYuXJjVmW3LUk",
+            authDomain: "casa-vacanze-fd31e.firebaseapp.com",
+            projectId: "casa-vacanze-fd31e",
+            storageBucket: "casa-vacanze-fd31e.firebasestorage.app",
+            messagingSenderId: "442503876925",
+            appId: "1:442503876925:web:9a514b66dc97d16d49b554",
+            measurementId: "G-FZ5FVXX7FN"
+        };
     </script>
 
     <script type="text/babel">
@@ -94,6 +100,9 @@
         };
 
 
+        // Usa la configurazione globale
+        const firebaseConfig = window.firebaseConfig;
+        
         // Inizializza Firebase solo se non già inizializzato
         if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
