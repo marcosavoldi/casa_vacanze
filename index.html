@@ -1,0 +1,1451 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏡 Gestione Casa Vacanze</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Poppins', sans-serif; }
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-shadow {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Utility functions per date
+        const formatDate = (date) => {
+            if (!date) return '';
+            const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
+            return d.toLocaleDateString('it-IT');
+        };
+
+        const formatDateInput = (date) => {
+            if (!date) return '';
+            const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const getStartOfMonth = (date = new Date()) => {
+            return new Date(date.getFullYear(), date.getMonth(), 1);
+        };
+
+        const getEndOfMonth = (date = new Date()) => {
+            return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+        };
+
+        const getStartOfWeek = (date = new Date()) => {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+            return new Date(d.setDate(diff));
+        };
+
+        const getEndOfWeek = (date = new Date()) => {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() + (day === 0 ? 0 : 7 - day);
+            return new Date(d.setDate(diff));
+        };
+
+        // Configurazione Firebase (da sostituire con le tue credenziali)
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Inizializza Firebase solo se non già inizializzato
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [properties, setProperties] = useState([]);
+            const [selectedProperty, setSelectedProperty] = useState(null);
+            const [currentView, setCurrentView] = useState('dashboard');
+            const [transactions, setTransactions] = useState([]);
+            const [budgetItems, setBudgetItems] = useState([]);
+            const [dateFilter, setDateFilter] = useState('all');
+            const [customDateRange, setCustomDateRange] = useState({ start: '', end: '' });
+            const [showAddProperty, setShowAddProperty] = useState(false);
+            const [showAddTransaction, setShowAddTransaction] = useState(false);
+            const [showAddBudget, setShowAddBudget] = useState(false);
+            const [showInviteUser, setShowInviteUser] = useState(false);
+            const [showCustomCategory, setShowCustomCategory] = useState(false);
+            const [customCategoryName, setCustomCategoryName] = useState('');
+            const [authorizedUsers, setAuthorizedUsers] = useState([]);
+            const [inviteEmail, setInviteEmail] = useState('');
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            // Form states
+            const [newPropertyName, setNewPropertyName] = useState('');
+            const [newPropertyAddress, setNewPropertyAddress] = useState('');
+            const [transactionForm, setTransactionForm] = useState({
+                name: '',
+                type: 'income',
+                amount: '',
+                date: formatDateInput(new Date()),
+                category: '',
+                customDescription: ''
+            });
+            const [budgetForm, setBudgetForm] = useState({
+                name: '',
+                amount: '',
+                category: '',
+                notes: ''
+            });
+
+            // Categorie predefinite con "Altro" aggiunto
+            const incomeCategories = ['🏠 Affitto', '🧹 Pulizie', '🍳 Colazione', '🚗 Parcheggio', '🎯 Altro'];
+            const expenseCategories = ['🧹 Pulizie', '🔧 Manutenzione', '💡 Utenze', '📱 Commissioni', '🛒 Forniture', '💸 Tasse', '🏢 Condominio', '🎯 Altro'];
+
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged((user) => {
+                    setUser(user);
+                    setLoading(false);
+                    if (user) {
+                        loadProperties(user.uid);
+                        loadAuthorizedUsers();
+                    }
+                });
+                return unsubscribe;
+            }, []);
+
+            useEffect(() => {
+                if (selectedProperty) {
+                    loadTransactions();
+                    loadBudgetItems();
+                }
+            }, [selectedProperty, dateFilter, customDateRange]);
+
+            useEffect(() => {
+                // Aggiorna il grafico quando cambiano le transazioni
+                if (currentView === 'charts' && transactions.length > 0) {
+                    setTimeout(() => drawChart(), 100);
+                }
+            }, [currentView, transactions]);
+
+            const signInWithGoogle = async () => {
+                const provider = new firebase.auth.GoogleAuthProvider();
+                try {
+                    const result = await auth.signInWithPopup(provider);
+                    // Verifica se l'utente è autorizzato
+                    const userEmail = result.user.email;
+                    const authSnapshot = await db.collection('authorizedUsers')
+                        .where('email', '==', userEmail)
+                        .get();
+                    
+                    if (authSnapshot.empty) {
+                        // Se non è nella lista, controlla se è il primo utente (owner)
+                        const usersSnapshot = await db.collection('users').get();
+                        if (usersSnapshot.empty) {
+                            // Primo utente, diventa owner
+                            await db.collection('users').doc(result.user.uid).set({
+                                email: userEmail,
+                                role: 'owner',
+                                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                            await db.collection('authorizedUsers').add({
+                                email: userEmail,
+                                role: 'owner',
+                                addedAt: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                        } else {
+                            // Non autorizzato
+                            alert('Non sei autorizzato ad accedere. Contatta il proprietario per essere invitato.');
+                            await auth.signOut();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Errore login:', error);
+                    alert('Errore durante il login. Verifica le credenziali Firebase.');
+                }
+            };
+
+            const signOut = async () => {
+                await auth.signOut();
+                setSelectedProperty(null);
+                setProperties([]);
+            };
+
+            const loadProperties = async (userId) => {
+                try {
+                    // Carica proprietà dove l'utente è owner o collaboratore
+                    const snapshot = await db.collection('properties')
+                        .where('authorizedUsers', 'array-contains', userId)
+                        .get();
+                    
+                    const props = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    
+                    // Se non ci sono proprietà ma l'utente è loggato, cerca proprietà legacy
+                    if (props.length === 0) {
+                        const legacySnapshot = await db.collection('properties')
+                            .where('userId', '==', userId)
+                            .get();
+                        
+                        const legacyProps = legacySnapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        
+                        // Aggiorna le proprietà legacy con il nuovo sistema
+                        for (const prop of legacyProps) {
+                            await db.collection('properties').doc(prop.id).update({
+                                authorizedUsers: [userId]
+                            });
+                        }
+                        
+                        setProperties(legacyProps);
+                        if (legacyProps.length > 0) {
+                            setSelectedProperty(legacyProps[0]);
+                        }
+                    } else {
+                        setProperties(props);
+                        if (props.length > 0 && !selectedProperty) {
+                            setSelectedProperty(props[0]);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Errore caricamento proprietà:', error);
+                }
+            };
+
+            const loadAuthorizedUsers = async () => {
+                try {
+                    const snapshot = await db.collection('authorizedUsers').get();
+                    const users = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    setAuthorizedUsers(users);
+                } catch (error) {
+                    console.error('Errore caricamento utenti:', error);
+                }
+            };
+
+            const inviteUser = async () => {
+                if (!inviteEmail || !inviteEmail.includes('@')) {
+                    alert('Inserisci un email valida');
+                    return;
+                }
+                
+                try {
+                    // Aggiungi l'email alla lista degli utenti autorizzati
+                    await db.collection('authorizedUsers').add({
+                        email: inviteEmail.toLowerCase(),
+                        role: 'collaborator',
+                        invitedBy: user.email,
+                        addedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    
+                    // Aggiorna le proprietà per dare accesso al nuovo utente
+                    if (selectedProperty) {
+                        const currentUsers = selectedProperty.authorizedUsers || [user.uid];
+                        // Questo sarà aggiornato quando l'utente farà login
+                        await db.collection('properties').doc(selectedProperty.id).update({
+                            pendingInvites: firebase.firestore.FieldValue.arrayUnion(inviteEmail.toLowerCase())
+                        });
+                    }
+                    
+                    alert(`Invito inviato a ${inviteEmail}. L'utente potrà accedere dopo il login con Google.`);
+                    setInviteEmail('');
+                    setShowInviteUser(false);
+                    loadAuthorizedUsers();
+                } catch (error) {
+                    console.error('Errore invito utente:', error);
+                    alert('Errore durante l\'invio dell\'invito');
+                }
+            };
+
+            const addProperty = async () => {
+                if (!newPropertyName.trim()) return;
+                try {
+                    const docRef = await db.collection('properties').add({
+                        userId: user.uid,
+                        authorizedUsers: [user.uid],
+                        name: newPropertyName,
+                        address: newPropertyAddress,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    const newProp = {
+                        id: docRef.id,
+                        name: newPropertyName,
+                        address: newPropertyAddress,
+                        authorizedUsers: [user.uid]
+                    };
+                    setProperties([...properties, newProp]);
+                    setSelectedProperty(newProp);
+                    setNewPropertyName('');
+                    setNewPropertyAddress('');
+                    setShowAddProperty(false);
+                } catch (error) {
+                    console.error('Errore aggiunta proprietà:', error);
+                }
+            };
+
+            const loadTransactions = async () => {
+                if (!selectedProperty) return;
+                
+                let query = db.collection('transactions')
+                    .where('propertyId', '==', selectedProperty.id);
+
+                // Applica filtro date
+                const now = new Date();
+                let startDate, endDate;
+
+                switch(dateFilter) {
+                    case 'month':
+                        startDate = getStartOfMonth(now);
+                        endDate = getEndOfMonth(now);
+                        break;
+                    case 'week':
+                        startDate = getStartOfWeek(now);
+                        endDate = getEndOfWeek(now);
+                        break;
+                    case 'lastMonth':
+                        const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                        startDate = getStartOfMonth(lastMonth);
+                        endDate = getEndOfMonth(lastMonth);
+                        break;
+                    case 'custom':
+                        if (customDateRange.start && customDateRange.end) {
+                            startDate = new Date(customDateRange.start);
+                            endDate = new Date(customDateRange.end);
+                        }
+                        break;
+                    default:
+                        startDate = null;
+                        endDate = null;
+                }
+
+                try {
+                    let snapshot;
+                    if (startDate && endDate) {
+                        snapshot = await query
+                            .where('date', '>=', firebase.firestore.Timestamp.fromDate(startDate))
+                            .where('date', '<=', firebase.firestore.Timestamp.fromDate(endDate))
+                            .orderBy('date', 'desc')
+                            .get();
+                    } else {
+                        snapshot = await query.orderBy('date', 'desc').get();
+                    }
+                    
+                    const trans = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data(),
+                        date: doc.data().date?.toDate() || new Date()
+                    }));
+                    setTransactions(trans);
+                } catch (error) {
+                    console.error('Errore caricamento transazioni:', error);
+                    // Prova senza ordinamento se c'è un errore di indice
+                    try {
+                        const snapshot = await db.collection('transactions')
+                            .where('propertyId', '==', selectedProperty.id)
+                            .get();
+                        const trans = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data(),
+                            date: doc.data().date?.toDate() || new Date()
+                        })).sort((a, b) => b.date - a.date);
+                        setTransactions(trans);
+                    } catch (e) {
+                        console.error('Errore secondario:', e);
+                    }
+                }
+            };
+
+            const loadBudgetItems = async () => {
+                if (!selectedProperty) return;
+                try {
+                    const snapshot = await db.collection('budgets')
+                        .where('propertyId', '==', selectedProperty.id)
+                        .get();
+                    const items = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    setBudgetItems(items);
+                } catch (error) {
+                    console.error('Errore caricamento budget:', error);
+                }
+            };
+
+            const addTransaction = async () => {
+                if (!transactionForm.name || !transactionForm.amount) return;
+                
+                let finalCategory = transactionForm.category;
+                let finalName = transactionForm.name;
+                
+                // Se la categoria è "Altro", usa la descrizione personalizzata
+                if (transactionForm.category === '🎯 Altro' && transactionForm.customDescription) {
+                    finalCategory = `🎯 ${transactionForm.customDescription}`;
+                }
+                
+                try {
+                    await db.collection('transactions').add({
+                        name: finalName,
+                        type: transactionForm.type,
+                        amount: parseFloat(transactionForm.amount),
+                        category: finalCategory,
+                        propertyId: selectedProperty.id,
+                        userId: user.uid,
+                        date: firebase.firestore.Timestamp.fromDate(new Date(transactionForm.date)),
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    
+                    setTransactionForm({
+                        name: '',
+                        type: 'income',
+                        amount: '',
+                        date: formatDateInput(new Date()),
+                        category: '',
+                        customDescription: ''
+                    });
+                    setShowAddTransaction(false);
+                    loadTransactions();
+                } catch (error) {
+                    console.error('Errore aggiunta transazione:', error);
+                }
+            };
+
+            const addBudgetItem = async () => {
+                if (!budgetForm.name || !budgetForm.amount) return;
+                
+                try {
+                    await db.collection('budgets').add({
+                        ...budgetForm,
+                        amount: parseFloat(budgetForm.amount),
+                        propertyId: selectedProperty.id,
+                        userId: user.uid,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    
+                    setBudgetForm({
+                        name: '',
+                        amount: '',
+                        category: '',
+                        notes: ''
+                    });
+                    setShowAddBudget(false);
+                    loadBudgetItems();
+                } catch (error) {
+                    console.error('Errore aggiunta budget:', error);
+                }
+            };
+
+            const deleteTransaction = async (id) => {
+                if (confirm('Sei sicuro di voler eliminare questa transazione?')) {
+                    await db.collection('transactions').doc(id).delete();
+                    loadTransactions();
+                }
+            };
+
+            const deleteBudgetItem = async (id) => {
+                if (confirm('Sei sicuro di voler eliminare questa voce di budget?')) {
+                    await db.collection('budgets').doc(id).delete();
+                    loadBudgetItems();
+                }
+            };
+
+            // Calcoli statistiche
+            const incomes = transactions.filter(t => t.type === 'income');
+            const expenses = transactions.filter(t => t.type === 'expense');
+            const totalIncome = incomes.reduce((sum, t) => sum + t.amount, 0);
+            const totalExpenses = expenses.reduce((sum, t) => sum + t.amount, 0);
+            const profit = totalIncome - totalExpenses;
+            const totalBudget = budgetItems.reduce((sum, b) => sum + b.amount, 0);
+
+            // Calcoli previsionali
+            const calculateProjections = () => {
+                if (transactions.length === 0) return null;
+                
+                // Calcola medie mensili degli ultimi 3 mesi
+                const threeMonthsAgo = new Date();
+                threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+                
+                const recentTransactions = transactions.filter(t => t.date >= threeMonthsAgo);
+                const monthsCount = Math.max(1, Math.ceil((new Date() - threeMonthsAgo) / (1000 * 60 * 60 * 24 * 30)));
+                
+                const recentIncome = recentTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+                const recentExpenses = recentTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+                
+                const avgMonthlyIncome = recentIncome / monthsCount;
+                const avgMonthlyExpenses = recentExpenses / monthsCount;
+                const avgMonthlyProfit = avgMonthlyIncome - avgMonthlyExpenses;
+                
+                // Proiezioni
+                const projection3Months = avgMonthlyProfit * 3;
+                const projection6Months = avgMonthlyProfit * 6;
+                const projection12Months = avgMonthlyProfit * 12;
+                
+                // Break-even (se in perdita)
+                let breakEvenMonths = null;
+                if (profit < 0 && avgMonthlyProfit > 0) {
+                    breakEvenMonths = Math.ceil(Math.abs(profit) / avgMonthlyProfit);
+                }
+                
+                return {
+                    avgMonthlyIncome,
+                    avgMonthlyExpenses,
+                    avgMonthlyProfit,
+                    projection3Months,
+                    projection6Months,
+                    projection12Months,
+                    breakEvenMonths
+                };
+            };
+
+            const projections = calculateProjections();
+
+            // Funzione per disegnare il grafico
+            const drawChart = () => {
+                const canvas = chartRef.current;
+                if (!canvas) return;
+
+                // Distruggi il grafico precedente se esiste
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                // Prepara dati per grafici
+                const monthlyData = {};
+                transactions.forEach(t => {
+                    const monthKey = `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, '0')}`;
+                    if (!monthlyData[monthKey]) {
+                        monthlyData[monthKey] = { income: 0, expense: 0 };
+                    }
+                    if (t.type === 'income') {
+                        monthlyData[monthKey].income += t.amount;
+                    } else {
+                        monthlyData[monthKey].expense += t.amount;
+                    }
+                });
+
+                const sortedMonths = Object.keys(monthlyData).sort();
+                const chartData = {
+                    labels: sortedMonths.map(m => {
+                        const [year, month] = m.split('-');
+                        const monthNames = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
+                        return `${monthNames[parseInt(month) - 1]} ${year}`;
+                    }),
+                    datasets: [
+                        {
+                            label: '💰 Entrate',
+                            data: sortedMonths.map(k => monthlyData[k].income),
+                            backgroundColor: 'rgba(34, 197, 94, 0.5)',
+                            borderColor: 'rgb(34, 197, 94)',
+                            borderWidth: 2
+                        },
+                        {
+                            label: '💸 Uscite',
+                            data: sortedMonths.map(k => monthlyData[k].expense),
+                            backgroundColor: 'rgba(239, 68, 68, 0.5)',
+                            borderColor: 'rgb(239, 68, 68)',
+                            borderWidth: 2
+                        }
+                    ]
+                };
+
+                const ctx = canvas.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: 'bar',
+                    data: chartData,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                            },
+                            title: {
+                                display: true,
+                                text: 'Andamento Entrate vs Uscite'
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    callback: function(value) {
+                                        return '€ ' + value;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto"></div>
+                            <p className="mt-4 text-gray-600">Caricamento...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!user) {
+                return (
+                    <div className="min-h-screen gradient-bg flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl card-shadow p-8 max-w-md w-full">
+                            <div className="text-center">
+                                <h1 className="text-4xl font-bold mb-2">🏡</h1>
+                                <h2 className="text-2xl font-bold text-gray-800 mb-2">Gestione Casa Vacanze</h2>
+                                <p className="text-gray-600 mb-8">Gestisci le tue proprietà in modo semplice e intuitivo</p>
+                                
+                                <button
+                                    onClick={signInWithGoogle}
+                                    className="w-full bg-white border border-gray-300 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-50 transition flex items-center justify-center gap-3"
+                                >
+                                    <svg className="w-5 h-5" viewBox="0 0 24 24">
+                                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                                    </svg>
+                                    Accedi con Google
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {/* Header */}
+                    <div className="gradient-bg text-white p-4 card-shadow">
+                        <div className="max-w-7xl mx-auto flex justify-between items-center flex-wrap gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <h1 className="text-2xl font-bold">🏡 Casa Vacanze</h1>
+                                {selectedProperty && (
+                                    <select
+                                        value={selectedProperty.id}
+                                        onChange={(e) => setSelectedProperty(properties.find(p => p.id === e.target.value))}
+                                        className="bg-white/20 backdrop-blur text-white border border-white/30 rounded-lg px-3 py-1"
+                                    >
+                                        {properties.map(prop => (
+                                            <option key={prop.id} value={prop.id} className="text-gray-800">
+                                                {prop.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+                                <button
+                                    onClick={() => setShowAddProperty(true)}
+                                    className="bg-white/20 backdrop-blur text-white px-3 py-1 rounded-lg hover:bg-white/30 transition"
+                                >
+                                    ➕ Proprietà
+                                </button>
+                                <button
+                                    onClick={() => setShowInviteUser(true)}
+                                    className="bg-white/20 backdrop-blur text-white px-3 py-1 rounded-lg hover:bg-white/30 transition"
+                                >
+                                    👥 Invita
+                                </button>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                <span className="text-sm">{user.email}</span>
+                                <button
+                                    onClick={signOut}
+                                    className="bg-white/20 backdrop-blur px-4 py-2 rounded-lg hover:bg-white/30 transition"
+                                >
+                                    Esci
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Navigation */}
+                    <div className="bg-white border-b sticky top-0 z-10">
+                        <div className="max-w-7xl mx-auto px-4">
+                            <div className="flex gap-1 overflow-x-auto py-2">
+                                <button
+                                    onClick={() => setCurrentView('dashboard')}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition ${
+                                        currentView === 'dashboard' 
+                                            ? 'bg-purple-600 text-white' 
+                                            : 'hover:bg-gray-100 text-gray-700'
+                                    }`}
+                                >
+                                    📊 Dashboard
+                                </button>
+                                <button
+                                    onClick={() => setCurrentView('transactions')}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition ${
+                                        currentView === 'transactions' 
+                                            ? 'bg-purple-600 text-white' 
+                                            : 'hover:bg-gray-100 text-gray-700'
+                                    }`}
+                                >
+                                    💳 Transazioni
+                                </button>
+                                <button
+                                    onClick={() => setCurrentView('budget')}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition ${
+                                        currentView === 'budget' 
+                                            ? 'bg-purple-600 text-white' 
+                                            : 'hover:bg-gray-100 text-gray-700'
+                                    }`}
+                                >
+                                    📋 Budget
+                                </button>
+                                <button
+                                    onClick={() => setCurrentView('charts')}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition ${
+                                        currentView === 'charts' 
+                                            ? 'bg-purple-600 text-white' 
+                                            : 'hover:bg-gray-100 text-gray-700'
+                                    }`}
+                                >
+                                    📈 Grafici
+                                </button>
+                                <button
+                                    onClick={() => setCurrentView('forecast')}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition ${
+                                        currentView === 'forecast' 
+                                            ? 'bg-purple-600 text-white' 
+                                            : 'hover:bg-gray-100 text-gray-700'
+                                    }`}
+                                >
+                                    🔮 Previsioni
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="max-w-7xl mx-auto p-4">
+                        {!selectedProperty ? (
+                            <div className="bg-white rounded-xl card-shadow p-8 text-center">
+                                <h2 className="text-xl font-semibold mb-4">Nessuna proprietà selezionata</h2>
+                                <p className="text-gray-600 mb-6">Aggiungi la tua prima proprietà per iniziare</p>
+                                <button
+                                    onClick={() => setShowAddProperty(true)}
+                                    className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition"
+                                >
+                                    ➕ Aggiungi Proprietà
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Filtro Date */}
+                                <div className="bg-white rounded-xl card-shadow p-4 mb-6">
+                                    <div className="flex flex-wrap gap-2 items-center">
+                                        <span className="text-sm font-medium text-gray-700">Periodo:</span>
+                                        <select
+                                            value={dateFilter}
+                                            onChange={(e) => setDateFilter(e.target.value)}
+                                            className="border border-gray-300 rounded-lg px-3 py-1 text-sm"
+                                        >
+                                            <option value="all">Tutto</option>
+                                            <option value="month">Mese Corrente</option>
+                                            <option value="week">Settimana Corrente</option>
+                                            <option value="lastMonth">Mese Scorso</option>
+                                            <option value="custom">Personalizzato</option>
+                                        </select>
+                                        
+                                        {dateFilter === 'custom' && (
+                                            <div className="flex gap-2 items-center">
+                                                <input
+                                                    type="date"
+                                                    value={customDateRange.start}
+                                                    onChange={(e) => setCustomDateRange({...customDateRange, start: e.target.value})}
+                                                    className="border border-gray-300 rounded-lg px-3 py-1 text-sm"
+                                                />
+                                                <span className="text-gray-500">-</span>
+                                                <input
+                                                    type="date"
+                                                    value={customDateRange.end}
+                                                    onChange={(e) => setCustomDateRange({...customDateRange, end: e.target.value})}
+                                                    className="border border-gray-300 rounded-lg px-3 py-1 text-sm"
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Dashboard View */}
+                                {currentView === 'dashboard' && (
+                                    <div className="space-y-6">
+                                        {/* KPI Cards */}
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div className="bg-gradient-to-br from-green-400 to-green-600 rounded-xl p-6 text-white">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <p className="text-green-100">Entrate</p>
+                                                        <p className="text-3xl font-bold mt-2">€ {totalIncome.toFixed(2)}</p>
+                                                        <p className="text-sm text-green-100 mt-2">{incomes.length} transazioni</p>
+                                                    </div>
+                                                    <span className="text-4xl">💰</span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="bg-gradient-to-br from-red-400 to-red-600 rounded-xl p-6 text-white">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <p className="text-red-100">Uscite</p>
+                                                        <p className="text-3xl font-bold mt-2">€ {totalExpenses.toFixed(2)}</p>
+                                                        <p className="text-sm text-red-100 mt-2">{expenses.length} transazioni</p>
+                                                    </div>
+                                                    <span className="text-4xl">💸</span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className={`bg-gradient-to-br ${profit >= 0 ? 'from-blue-400 to-blue-600' : 'from-orange-400 to-orange-600'} rounded-xl p-6 text-white`}>
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <p className={profit >= 0 ? 'text-blue-100' : 'text-orange-100'}>Profitto</p>
+                                                        <p className="text-3xl font-bold mt-2">€ {profit.toFixed(2)}</p>
+                                                        <p className={`text-sm mt-2 ${profit >= 0 ? 'text-blue-100' : 'text-orange-100'}`}>
+                                                            {profit >= 0 ? '📈 In positivo' : '📉 In negativo'}
+                                                        </p>
+                                                    </div>
+                                                    <span className="text-4xl">{profit >= 0 ? '✨' : '⚠️'}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Azioni Rapide */}
+                                        <div className="bg-white rounded-xl card-shadow p-6">
+                                            <h3 className="text-lg font-semibold mb-4">⚡ Azioni Rapide</h3>
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                                <button
+                                                    onClick={() => {
+                                                        setTransactionForm({...transactionForm, type: 'income'});
+                                                        setShowAddTransaction(true);
+                                                    }}
+                                                    className="bg-green-50 text-green-700 p-3 rounded-lg hover:bg-green-100 transition text-center"
+                                                >
+                                                    <span className="block text-2xl mb-1">➕</span>
+                                                    <span className="text-sm">Aggiungi Entrata</span>
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setTransactionForm({...transactionForm, type: 'expense'});
+                                                        setShowAddTransaction(true);
+                                                    }}
+                                                    className="bg-red-50 text-red-700 p-3 rounded-lg hover:bg-red-100 transition text-center"
+                                                >
+                                                    <span className="block text-2xl mb-1">➖</span>
+                                                    <span className="text-sm">Aggiungi Uscita</span>
+                                                </button>
+                                                <button
+                                                    onClick={() => setShowAddBudget(true)}
+                                                    className="bg-blue-50 text-blue-700 p-3 rounded-lg hover:bg-blue-100 transition text-center"
+                                                >
+                                                    <span className="block text-2xl mb-1">📋</span>
+                                                    <span className="text-sm">Aggiungi Budget</span>
+                                                </button>
+                                                <button
+                                                    onClick={() => setCurrentView('charts')}
+                                                    className="bg-purple-50 text-purple-700 p-3 rounded-lg hover:bg-purple-100 transition text-center"
+                                                >
+                                                    <span className="block text-2xl mb-1">📊</span>
+                                                    <span className="text-sm">Vedi Grafici</span>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Ultime Transazioni */}
+                                        <div className="bg-white rounded-xl card-shadow p-6">
+                                            <h3 className="text-lg font-semibold mb-4">🔄 Ultime Transazioni</h3>
+                                            {transactions.slice(0, 5).map(t => (
+                                                <div key={t.id} className="flex justify-between items-center py-3 border-b last:border-0">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={`text-2xl ${t.type === 'income' ? 'text-green-500' : 'text-red-500'}`}>
+                                                            {t.type === 'income' ? '⬆️' : '⬇️'}
+                                                        </span>
+                                                        <div>
+                                                            <p className="font-medium">{t.name}</p>
+                                                            <p className="text-sm text-gray-500">
+                                                                {t.category} • {formatDate(t.date)}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    <p className={`font-semibold ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                                                        {t.type === 'income' ? '+' : '-'}€ {t.amount.toFixed(2)}
+                                                    </p>
+                                                </div>
+                                            ))}
+                                            {transactions.length === 0 && (
+                                                <p className="text-gray-500 text-center py-4">Nessuna transazione disponibile</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Forecast View */}
+                                {currentView === 'forecast' && (
+                                    <div className="space-y-6">
+                                        <div className="bg-white rounded-xl card-shadow p-6">
+                                            <h3 className="text-lg font-semibold mb-6">🔮 Dashboard Previsionale</h3>
+                                            
+                                            {projections ? (
+                                                <>
+                                                    {/* Medie Mensili */}
+                                                    <div className="grid md:grid-cols-3 gap-4 mb-6">
+                                                        <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4">
+                                                            <p className="text-green-700 font-medium text-sm">Media Entrate Mensili</p>
+                                                            <p className="text-2xl font-bold text-green-900 mt-2">
+                                                                € {projections.avgMonthlyIncome.toFixed(2)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4">
+                                                            <p className="text-red-700 font-medium text-sm">Media Uscite Mensili</p>
+                                                            <p className="text-2xl font-bold text-red-900 mt-2">
+                                                                € {projections.avgMonthlyExpenses.toFixed(2)}
+                                                            </p>
+                                                        </div>
+                                                        <div className={`bg-gradient-to-br ${projections.avgMonthlyProfit >= 0 ? 'from-blue-50 to-blue-100' : 'from-orange-50 to-orange-100'} rounded-lg p-4`}>
+                                                            <p className={`${projections.avgMonthlyProfit >= 0 ? 'text-blue-700' : 'text-orange-700'} font-medium text-sm`}>
+                                                                Profitto Mensile Medio
+                                                            </p>
+                                                            <p className={`text-2xl font-bold mt-2 ${projections.avgMonthlyProfit >= 0 ? 'text-blue-900' : 'text-orange-900'}`}>
+                                                                € {projections.avgMonthlyProfit.toFixed(2)}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Proiezioni */}
+                                                    <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-6 mb-6">
+                                                        <h4 className="text-purple-800 font-semibold mb-4">📊 Proiezioni Future (basate sul trend attuale)</h4>
+                                                        <div className="grid md:grid-cols-3 gap-4">
+                                                            <div className="bg-white/70 backdrop-blur rounded-lg p-3">
+                                                                <p className="text-purple-700 text-sm">Prossimi 3 mesi</p>
+                                                                <p className={`text-xl font-bold ${projections.projection3Months >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                                                    {projections.projection3Months >= 0 ? '+' : ''}€ {projections.projection3Months.toFixed(2)}
+                                                                </p>
+                                                            </div>
+                                                            <div className="bg-white/70 backdrop-blur rounded-lg p-3">
+                                                                <p className="text-purple-700 text-sm">Prossimi 6 mesi</p>
+                                                                <p className={`text-xl font-bold ${projections.projection6Months >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                                                    {projections.projection6Months >= 0 ? '+' : ''}€ {projections.projection6Months.toFixed(2)}
+                                                                </p>
+                                                            </div>
+                                                            <div className="bg-white/70 backdrop-blur rounded-lg p-3">
+                                                                <p className="text-purple-700 text-sm">Prossimi 12 mesi</p>
+                                                                <p className={`text-xl font-bold ${projections.projection12Months >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                                                    {projections.projection12Months >= 0 ? '+' : ''}€ {projections.projection12Months.toFixed(2)}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* ROI e Break-even */}
+                                                    <div className="grid md:grid-cols-2 gap-4">
+                                                        <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg p-4">
+                                                            <p className="text-amber-700 font-medium">ROI Attuale</p>
+                                                            <p className="text-3xl font-bold text-amber-900 mt-2">
+                                                                {totalExpenses > 0 ? ((profit / totalExpenses) * 100).toFixed(1) : '0'}%
+                                                            </p>
+                                                            <p className="text-sm text-amber-600 mt-2">
+                                                                {profit >= 0 ? '✅ Investimento redditizio' : '⚠️ Sotto break-even'}
+                                                            </p>
+                                                        </div>
+                                                        {projections.breakEvenMonths && (
+                                                            <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-lg p-4">
+                                                                <p className="text-indigo-700 font-medium">Tempo al Break-Even</p>
+                                                                <p className="text-3xl font-bold text-indigo-900 mt-2">
+                                                                    {projections.breakEvenMonths} mesi
+                                                                </p>
+                                                                <p className="text-sm text-indigo-600 mt-2">
+                                                                    📈 Con il trend attuale
+                                                                </p>
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Suggerimenti */}
+                                                    <div className="bg-gradient-to-br from-teal-50 to-teal-100 rounded-lg p-6 mt-6">
+                                                        <h4 className="text-teal-800 font-semibold mb-3">💡 Suggerimenti Basati sui Dati</h4>
+                                                        <ul className="space-y-2 text-teal-700">
+                                                            {projections.avgMonthlyProfit > 0 ? (
+                                                                <>
+                                                                    <li>✅ Ottimo! Stai generando profitti costanti</li>
+                                                                    <li>📈 Considera di reinvestire parte dei profitti per migliorare la proprietà</li>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <li>⚠️ Attenzione: le uscite superano le entrate</li>
+                                                                    <li>💡 Rivedi i prezzi o riduci le spese non essenziali</li>
+                                                                </>
+                                                            )}
+                                                            {totalBudget > 0 && (
+                                                                <li>📋 Hai €{totalBudget.toFixed(2)} di spese preventivate da considerare</li>
+                                                            )}
+                                                        </ul>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="text-center py-8">
+                                                    <p className="text-gray-500">Inserisci alcune transazioni per vedere le previsioni</p>
+                                                    <p className="text-sm text-gray-400 mt-2">Le proiezioni si basano sui dati degli ultimi 3 mesi</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Transactions View */}
+                                {currentView === 'transactions' && (
+                                    <div className="space-y-6">
+                                        <div className="bg-white rounded-xl card-shadow p-6">
+                                            <div className="flex justify-between items-center mb-6">
+                                                <h3 className="text-lg font-semibold">💳 Gestione Transazioni</h3>
+                                                <button
+                                                    onClick={() => setShowAddTransaction(true)}
+                                                    className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition"
+                                                >
+                                                    ➕ Aggiungi
+                                                </button>
+                                            </div>
+
+                                            <div className="grid md:grid-cols-2 gap-6">
+                                                {/* Entrate */}
+                                                <div>
+                                                    <div className="bg-green-50 rounded-lg p-4 mb-4">
+                                                        <h4 className="font-semibold text-green-800 mb-2">💰 Entrate</h4>
+                                                        <p className="text-2xl font-bold text-green-600">€ {totalIncome.toFixed(2)}</p>
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        {incomes.map(t => (
+                                                            <div key={t.id} className="bg-white border border-green-200 rounded-lg p-3 hover:shadow-md transition">
+                                                                <div className="flex justify-between items-start">
+                                                                    <div>
+                                                                        <p className="font-medium">{t.name}</p>
+                                                                        <p className="text-sm text-gray-500">
+                                                                            {t.category} • {formatDate(t.date)}
+                                                                        </p>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <p className="font-semibold text-green-600">€ {t.amount.toFixed(2)}</p>
+                                                                        <button
+                                                                            onClick={() => deleteTransaction(t.id)}
+                                                                            className="text-red-500 hover:text-red-700"
+                                                                        >
+                                                                            🗑️
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Uscite */}
+                                                <div>
+                                                    <div className="bg-red-50 rounded-lg p-4 mb-4">
+                                                        <h4 className="font-semibold text-red-800 mb-2">💸 Uscite</h4>
+                                                        <p className="text-2xl font-bold text-red-600">€ {totalExpenses.toFixed(2)}</p>
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        {expenses.map(t => (
+                                                            <div key={t.id} className="bg-white border border-red-200 rounded-lg p-3 hover:shadow-md transition">
+                                                                <div className="flex justify-between items-start">
+                                                                    <div>
+                                                                        <p className="font-medium">{t.name}</p>
+                                                                        <p className="text-sm text-gray-500">
+                                                                            {t.category} • {formatDate(t.date)}
+                                                                        </p>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <p className="font-semibold text-red-600">€ {t.amount.toFixed(2)}</p>
+                                                                        <button
+                                                                            onClick={() => deleteTransaction(t.id)}
+                                                                            className="text-red-500 hover:text-red-700"
+                                                                        >
+                                                                            🗑️
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Budget View */}
+                                {currentView === 'budget' && (
+                                    <div className="space-y-6">
+                                        <div className="bg-white rounded-xl card-shadow p-6">
+                                            <div className="flex justify-between items-center mb-6">
+                                                <h3 className="text-lg font-semibold">📋 Spese Preventivate</h3>
+                                                <button
+                                                    onClick={() => setShowAddBudget(true)}
+                                                    className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition"
+                                                >
+                                                    ➕ Aggiungi
+                                                </button>
+                                            </div>
+
+                                            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+                                                <h4 className="font-semibold text-blue-800 mb-2">💼 Totale Budget</h4>
+                                                <p className="text-2xl font-bold text-blue-600">€ {totalBudget.toFixed(2)}</p>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                {budgetItems.map(item => (
+                                                    <div key={item.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
+                                                        <div className="flex justify-between items-start">
+                                                            <div className="flex-1">
+                                                                <p className="font-medium text-lg">{item.name}</p>
+                                                                {item.category && (
+                                                                    <span className="inline-block bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded mt-1">
+                                                                        {item.category}
+                                                                    </span>
+                                                                )}
+                                                                {item.notes && (
+                                                                    <p className="text-sm text-gray-500 mt-2">{item.notes}</p>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex items-center gap-3">
+                                                                <p className="font-semibold text-lg">€ {item.amount.toFixed(2)}</p>
+                                                                <button
+                                                                    onClick={() => deleteBudgetItem(item.id)}
+                                                                    className="text-red-500 hover:text-red-700"
+                                                                >
+                                                                    🗑️
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                {budgetItems.length === 0 && (
+                                                    <div className="text-center py-8">
+                                                        <p className="text-gray-500">Nessuna spesa preventivata</p>
+                                                        <p className="text-sm text-gray-400 mt-2">Aggiungi le tue spese previste per tenere traccia del budget</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Charts View */}
+                                {currentView === 'charts' && (
+                                    <div className="space-y-6">
+                                        <div className="bg-white rounded-xl card-shadow p-6">
+                                            <h3 className="text-lg font-semibold mb-6">📈 Analisi e Grafici</h3>
+                                            
+                                            {transactions.length > 0 ? (
+                                                <div className="bg-gray-50 rounded-lg p-4" style={{ height: '400px' }}>
+                                                    <canvas ref={chartRef}></canvas>
+                                                </div>
+                                            ) : (
+                                                <p className="text-center text-gray-500 py-8">
+                                                    Nessun dato disponibile per generare grafici
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+
+                    {/* Modals */}
+                    {/* Add Property Modal */}
+                    {showAddProperty && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-xl max-w-md w-full p-6">
+                                <h3 className="text-lg font-semibold mb-4">➕ Aggiungi Nuova Proprietà</h3>
+                                <input
+                                    type="text"
+                                    placeholder="Nome proprietà"
+                                    value={newPropertyName}
+                                    onChange={(e) => setNewPropertyName(e.target.value)}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-3"
+                                />
+                                <input
+                                    type="text"
+                                    placeholder="Indirizzo (opzionale)"
+                                    value={newPropertyAddress}
+                                    onChange={(e) => setNewPropertyAddress(e.target.value)}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4"
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={addProperty}
+                                        className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition"
+                                    >
+                                        Salva
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setShowAddProperty(false);
+                                            setNewPropertyName('');
+                                            setNewPropertyAddress('');
+                                        }}
+                                        className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 transition"
+                                    >
+                                        Annulla
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Invite User Modal */}
+                    {showInviteUser && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-xl max-w-md w-full p-6">
+                                <h3 className="text-lg font-semibold mb-4">👥 Invita Collaboratore</h3>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    L'utente invitato potrà accedere a tutte le proprietà dopo il login con Google.
+                                </p>
+                                <input
+                                    type="email"
+                                    placeholder="Email dell'utente da invitare"
+                                    value={inviteEmail}
+                                    onChange={(e) => setInviteEmail(e.target.value)}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4"
+                                />
+                                
+                                {/* Lista utenti autorizzati */}
+                                {authorizedUsers.length > 0 && (
+                                    <div className="mb-4">
+                                        <p className="text-sm font-medium text-gray-700 mb-2">Utenti già autorizzati:</p>
+                                        <div className="bg-gray-50 rounded-lg p-2 max-h-32 overflow-y-auto">
+                                            {authorizedUsers.map(u => (
+                                                <div key={u.id} className="text-sm text-gray-600 py-1">
+                                                    {u.email} ({u.role === 'owner' ? 'Proprietario' : 'Collaboratore'})
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={inviteUser}
+                                        className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition"
+                                    >
+                                        Invia Invito
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setShowInviteUser(false);
+                                            setInviteEmail('');
+                                        }}
+                                        className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 transition"
+                                    >
+                                        Annulla
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Add Transaction Modal */}
+                    {showAddTransaction && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-xl max-w-md w-full p-6">
+                                <h3 className="text-lg font-semibold mb-4">
+                                    {transactionForm.type === 'income' ? '💰 Aggiungi Entrata' : '💸 Aggiungi Uscita'}
+                                </h3>
+                                
+                                <div className="space-y-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Descrizione"
+                                        value={transactionForm.name}
+                                        onChange={(e) => setTransactionForm({...transactionForm, name: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                    />
+                                    
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setTransactionForm({...transactionForm, type: 'income'})}
+                                            className={`flex-1 py-2 rounded-lg transition ${
+                                                transactionForm.type === 'income'
+                                                    ? 'bg-green-600 text-white'
+                                                    : 'bg-gray-200 text-gray-700'
+                                            }`}
+                                        >
+                                            Entrata
+                                        </button>
+                                        <button
+                                            onClick={() => setTransactionForm({...transactionForm, type: 'expense'})}
+                                            className={`flex-1 py-2 rounded-lg transition ${
+                                                transactionForm.type === 'expense'
+                                                    ? 'bg-red-600 text-white'
+                                                    : 'bg-gray-200 text-gray-700'
+                                            }`}
+                                        >
+                                            Uscita
+                                        </button>
+                                    </div>
+                                    
+                                    <input
+                                        type="number"
+                                        placeholder="Importo (€)"
+                                        value={transactionForm.amount}
+                                        onChange={(e) => setTransactionForm({...transactionForm, amount: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                        step="0.01"
+                                    />
+                                    
+                                    <select
+                                        value={transactionForm.category}
+                                        onChange={(e) => setTransactionForm({...transactionForm, category: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                    >
+                                        <option value="">Seleziona categoria</option>
+                                        {(transactionForm.type === 'income' ? incomeCategories : expenseCategories).map(cat => (
+                                            <option key={cat} value={cat}>{cat}</option>
+                                        ))}
+                                    </select>
+
+                                    {/* Campo aggiuntivo per categoria "Altro" */}
+                                    {transactionForm.category === '🎯 Altro' && (
+                                        <input
+                                            type="text"
+                                            placeholder="Specifica la categoria personalizzata"
+                                            value={transactionForm.customDescription}
+                                            onChange={(e) => setTransactionForm({...transactionForm, customDescription: e.target.value})}
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                        />
+                                    )}
+                                    
+                                    <input
+                                        type="date"
+                                        value={transactionForm.date}
+                                        onChange={(e) => setTransactionForm({...transactionForm, date: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                    />
+                                </div>
+                                
+                                <div className="flex gap-2 mt-4">
+                                    <button
+                                        onClick={addTransaction}
+                                        className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition"
+                                    >
+                                        Salva
+                                    </button>
+                                    <button
+                                        onClick={() => setShowAddTransaction(false)}
+                                        className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 transition"
+                                    >
+                                        Annulla
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Add Budget Modal */}
+                    {showAddBudget && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-xl max-w-md w-full p-6">
+                                <h3 className="text-lg font-semibold mb-4">📋 Aggiungi Spesa Preventivata</h3>
+                                
+                                <div className="space-y-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Descrizione spesa"
+                                        value={budgetForm.name}
+                                        onChange={(e) => setBudgetForm({...budgetForm, name: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                    />
+                                    
+                                    <input
+                                        type="number"
+                                        placeholder="Importo previsto (€)"
+                                        value={budgetForm.amount}
+                                        onChange={(e) => setBudgetForm({...budgetForm, amount: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                        step="0.01"
+                                    />
+                                    
+                                    <input
+                                        type="text"
+                                        placeholder="Categoria (opzionale)"
+                                        value={budgetForm.category}
+                                        onChange={(e) => setBudgetForm({...budgetForm, category: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                    />
+                                    
+                                    <textarea
+                                        placeholder="Note (opzionale)"
+                                        value={budgetForm.notes}
+                                        onChange={(e) => setBudgetForm({...budgetForm, notes: e.target.value})}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                        rows="3"
+                                    />
+                                </div>
+                                
+                                <div className="flex gap-2 mt-4">
+                                    <button
+                                        onClick={addBudgetItem}
+                                        className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition"
+                                    >
+                                        Salva
+                                    </button>
+                                    <button
+                                        onClick={() => setShowAddBudget(false)}
+                                        className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 transition"
+                                    >
+                                        Annulla
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
