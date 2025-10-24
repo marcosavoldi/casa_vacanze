@@ -115,10 +115,13 @@
             const [showAddTransaction, setShowAddTransaction] = useState(false);
             const [showAddBudget, setShowAddBudget] = useState(false);
             const [showInviteUser, setShowInviteUser] = useState(false);
-            const [showCustomCategory, setShowCustomCategory] = useState(false);
-            const [customCategoryName, setCustomCategoryName] = useState('');
+            const [showManageCategories, setShowManageCategories] = useState(false);
+            const [categoryType, setCategoryType] = useState('income'); // per il modal categorie
+            const [newCategoryName, setNewCategoryName] = useState('');
             const [authorizedUsers, setAuthorizedUsers] = useState([]);
             const [inviteEmail, setInviteEmail] = useState('');
+            const [incomeCategories, setIncomeCategories] = useState([]);
+            const [expenseCategories, setExpenseCategories] = useState([]);
             const chartRef = useRef(null);
             const chartInstance = useRef(null);
 
@@ -130,8 +133,7 @@
                 type: 'income',
                 amount: '',
                 date: formatDateInput(new Date()),
-                category: '',
-                customDescription: ''
+                category: ''
             });
             const [budgetForm, setBudgetForm] = useState({
                 name: '',
@@ -139,10 +141,6 @@
                 category: '',
                 notes: ''
             });
-
-            // Categorie predefinite con "Altro" aggiunto
-            const incomeCategories = ['🏠 Affitto', '🧹 Pulizie', '🍳 Colazione', '🚗 Parcheggio', '🎯 Altro'];
-            const expenseCategories = ['🧹 Pulizie', '🔧 Manutenzione', '💡 Utenze', '📱 Commissioni', '🛒 Forniture', '💸 Tasse', '🏢 Condominio', '🎯 Altro'];
 
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged((user) => {
@@ -161,6 +159,7 @@
                 if (selectedProperty) {
                     loadTransactions();
                     loadBudgetItems();
+                    loadCategories();
                 }
             }, [selectedProperty, dateFilter, customDateRange]);
 
@@ -335,19 +334,28 @@
 
             const addProperty = async () => {
                 if (!newPropertyName.trim()) return;
+                
+                // Categorie predefinite per una nuova proprietà
+                const defaultIncomeCategories = ['🏠 Affitto', '🧹 Pulizie Extra', '🍳 Colazione', '🚗 Parcheggio'];
+                const defaultExpenseCategories = ['🧹 Pulizie', '🔧 Manutenzione', '💡 Utenze', '📱 Commissioni', '🛒 Forniture', '💸 Tasse', '🏢 Condominio'];
+                
                 try {
                     const docRef = await db.collection('properties').add({
                         userId: user.uid,
                         authorizedUsers: [user.uid],
                         name: newPropertyName,
                         address: newPropertyAddress,
+                        customIncomeCategories: defaultIncomeCategories,
+                        customExpenseCategories: defaultExpenseCategories,
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     const newProp = {
                         id: docRef.id,
                         name: newPropertyName,
                         address: newPropertyAddress,
-                        authorizedUsers: [user.uid]
+                        authorizedUsers: [user.uid],
+                        customIncomeCategories: defaultIncomeCategories,
+                        customExpenseCategories: defaultExpenseCategories
                     };
                     setProperties([...properties, newProp]);
                     setSelectedProperty(newProp);
@@ -397,6 +405,79 @@
                 } catch (error) {
                     console.error('Errore eliminazione proprietà:', error);
                     alert('Errore durante l\'eliminazione della proprietà');
+                }
+            };
+
+            const loadCategories = async () => {
+                if (!selectedProperty) return;
+                
+                // Carica le categorie dalla proprietà, o usa quelle di default
+                const defaultIncome = ['🏠 Affitto', '🧹 Pulizie Extra', '🍳 Colazione', '🚗 Parcheggio'];
+                const defaultExpense = ['🧹 Pulizie', '🔧 Manutenzione', '💡 Utenze', '📱 Commissioni', '🛒 Forniture', '💸 Tasse', '🏢 Condominio'];
+                
+                setIncomeCategories(selectedProperty.customIncomeCategories || defaultIncome);
+                setExpenseCategories(selectedProperty.customExpenseCategories || defaultExpense);
+            };
+
+            const addCategory = async () => {
+                if (!newCategoryName.trim() || !selectedProperty) return;
+                
+                try {
+                    const updatedCategories = categoryType === 'income' 
+                        ? [...incomeCategories, newCategoryName]
+                        : [...expenseCategories, newCategoryName];
+                    
+                    const fieldName = categoryType === 'income' ? 'customIncomeCategories' : 'customExpenseCategories';
+                    
+                    await db.collection('properties').doc(selectedProperty.id).update({
+                        [fieldName]: updatedCategories
+                    });
+                    
+                    if (categoryType === 'income') {
+                        setIncomeCategories(updatedCategories);
+                    } else {
+                        setExpenseCategories(updatedCategories);
+                    }
+                    
+                    // Aggiorna anche selectedProperty nello stato
+                    setSelectedProperty({
+                        ...selectedProperty,
+                        [fieldName]: updatedCategories
+                    });
+                    
+                    setNewCategoryName('');
+                } catch (error) {
+                    console.error('Errore aggiunta categoria:', error);
+                    alert('Errore durante l\'aggiunta della categoria');
+                }
+            };
+
+            const deleteCategory = async (category, type) => {
+                if (!confirm(`Sei sicuro di voler eliminare la categoria "${category}"?`)) return;
+                
+                try {
+                    const currentCategories = type === 'income' ? incomeCategories : expenseCategories;
+                    const updatedCategories = currentCategories.filter(cat => cat !== category);
+                    const fieldName = type === 'income' ? 'customIncomeCategories' : 'customExpenseCategories';
+                    
+                    await db.collection('properties').doc(selectedProperty.id).update({
+                        [fieldName]: updatedCategories
+                    });
+                    
+                    if (type === 'income') {
+                        setIncomeCategories(updatedCategories);
+                    } else {
+                        setExpenseCategories(updatedCategories);
+                    }
+                    
+                    // Aggiorna anche selectedProperty nello stato
+                    setSelectedProperty({
+                        ...selectedProperty,
+                        [fieldName]: updatedCategories
+                    });
+                } catch (error) {
+                    console.error('Errore eliminazione categoria:', error);
+                    alert('Errore durante l\'eliminazione della categoria');
                 }
             };
 
@@ -491,20 +572,12 @@
             const addTransaction = async () => {
                 if (!transactionForm.name || !transactionForm.amount) return;
 
-                let finalCategory = transactionForm.category;
-                let finalName = transactionForm.name;
-
-                // Se la categoria è "Altro", usa la descrizione personalizzata
-                if (transactionForm.category === '🎯 Altro' && transactionForm.customDescription) {
-                    finalCategory = `🎯 ${transactionForm.customDescription}`;
-                }
-
                 try {
                     await db.collection('transactions').add({
-                        name: finalName,
+                        name: transactionForm.name,
                         type: transactionForm.type,
                         amount: parseFloat(transactionForm.amount),
-                        category: finalCategory,
+                        category: transactionForm.category,
                         propertyId: selectedProperty.id,
                         userId: user.uid,
                         date: firebase.firestore.Timestamp.fromDate(new Date(transactionForm.date)),
@@ -516,8 +589,7 @@
                         type: 'income',
                         amount: '',
                         date: formatDateInput(new Date()),
-                        category: '',
-                        customDescription: ''
+                        category: ''
                     });
                     setShowAddTransaction(false);
                     loadTransactions();
@@ -773,6 +845,15 @@
                                 >
                                     👥 Invita
                                 </button>
+                                {selectedProperty && (
+                                    <button
+                                        onClick={() => setShowManageCategories(true)}
+                                        className="bg-white/20 backdrop-blur text-white px-3 py-1 rounded-lg hover:bg-white/30 transition"
+                                        title="Gestisci categorie"
+                                    >
+                                        🏷️ Categorie
+                                    </button>
+                                )}
                             </div>
                             <div className="flex items-center gap-4">
                                 <span className="text-sm">{user.email}</span>
@@ -1423,17 +1504,6 @@
                                         ))}
                                     </select>
 
-                                    {/* Campo aggiuntivo per categoria "Altro" */}
-                                    {transactionForm.category === '🎯 Altro' && (
-                                        <input
-                                            type="text"
-                                            placeholder="Specifica la categoria personalizzata"
-                                            value={transactionForm.customDescription}
-                                            onChange={(e) => setTransactionForm({ ...transactionForm, customDescription: e.target.value })}
-                                            className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                                        />
-                                    )}
-
                                     <input
                                         type="date"
                                         value={transactionForm.date}
@@ -1513,6 +1583,91 @@
                                         className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 transition"
                                     >
                                         Annulla
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Manage Categories Modal */}
+                    {showManageCategories && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-xl max-w-3xl w-full p-6 max-h-[80vh] overflow-y-auto">
+                                <h3 className="text-lg font-semibold mb-4">🏷️ Gestione Categorie</h3>
+                                
+                                <div className="mb-6">
+                                    <div className="flex gap-2 mb-4">
+                                        <button
+                                            onClick={() => setCategoryType('income')}
+                                            className={`flex-1 py-2 rounded-lg transition ${categoryType === 'income'
+                                                    ? 'bg-green-600 text-white'
+                                                    : 'bg-gray-200 text-gray-700'
+                                                }`}
+                                        >
+                                            💰 Entrate
+                                        </button>
+                                        <button
+                                            onClick={() => setCategoryType('expense')}
+                                            className={`flex-1 py-2 rounded-lg transition ${categoryType === 'expense'
+                                                    ? 'bg-red-600 text-white'
+                                                    : 'bg-gray-200 text-gray-700'
+                                                }`}
+                                        >
+                                            💸 Uscite
+                                        </button>
+                                    </div>
+
+                                    {/* Add new category */}
+                                    <div className="flex gap-2 mb-4">
+                                        <input
+                                            type="text"
+                                            placeholder="Nome nuova categoria (es: 🎉 Eventi Speciali)"
+                                            value={newCategoryName}
+                                            onChange={(e) => setNewCategoryName(e.target.value)}
+                                            className="flex-1 border border-gray-300 rounded-lg px-3 py-2"
+                                            onKeyPress={(e) => e.key === 'Enter' && addCategory()}
+                                        />
+                                        <button
+                                            onClick={addCategory}
+                                            className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition"
+                                        >
+                                            ➕ Aggiungi
+                                        </button>
+                                    </div>
+
+                                    {/* List of categories */}
+                                    <div className="space-y-2">
+                                        <h4 className="font-semibold text-gray-700 mb-2">
+                                            {categoryType === 'income' ? '💰 Categorie Entrate' : '💸 Categorie Uscite'}
+                                        </h4>
+                                        {(categoryType === 'income' ? incomeCategories : expenseCategories).map((cat, index) => (
+                                            <div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
+                                                <span className="font-medium">{cat}</span>
+                                                <button
+                                                    onClick={() => deleteCategory(cat, categoryType)}
+                                                    className="text-red-500 hover:text-red-700 transition"
+                                                    title="Elimina categoria"
+                                                >
+                                                    🗑️
+                                                </button>
+                                            </div>
+                                        ))}
+                                        {(categoryType === 'income' ? incomeCategories : expenseCategories).length === 0 && (
+                                            <p className="text-gray-500 text-center py-4">Nessuna categoria. Aggiungine una!</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-2 mt-4">
+                                    <button
+                                        onClick={() => {
+                                            setShowManageCategories(false);
+                                            setNewCategoryName('');
+                                            setCategoryType('income');
+                                        }}
+                                        className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition"
+                                    >
+                                        Chiudi
                                     </button>
                                 </div>
                             </div>
