@@ -145,70 +145,6 @@
             const expenseCategories = ['🧹 Pulizie', '🔧 Manutenzione', '💡 Utenze', '📱 Commissioni', '🛒 Forniture', '💸 Tasse', '🏢 Condominio', '🎯 Altro'];
 
             useEffect(() => {
-                // Gestisci il risultato del redirect dopo il login con Google
-                auth.getRedirectResult()
-                    .then(async (result) => {
-                        if (result && result.user) {
-                            console.log('✅ Login completato:', result.user.email);
-                            const userEmail = result.user.email;
-                            const userId = result.user.uid;
-
-                            try {
-                                // Verifica se l'utente è già autorizzato
-                                console.log('🔍 Cerco utente in authorizedUsers...');
-                                const authSnapshot = await db.collection('authorizedUsers')
-                                    .where('email', '==', userEmail)
-                                    .get();
-
-                                if (authSnapshot.empty) {
-                                    console.log('❌ Utente non trovato in authorizedUsers');
-                                    
-                                    // Controlla se è il primo utente
-                                    console.log('🔍 Verifico se è il primo utente...');
-                                    const allAuthUsers = await db.collection('authorizedUsers').limit(1).get();
-                                    
-                                    if (allAuthUsers.empty) {
-                                        console.log('✨ Primo utente! Creazione owner...');
-                                        
-                                        // Crea il documento in authorizedUsers
-                                        await db.collection('authorizedUsers').add({
-                                            email: userEmail,
-                                            userId: userId,
-                                            role: 'owner',
-                                            addedAt: firebase.firestore.FieldValue.serverTimestamp()
-                                        });
-                                        
-                                        // Crea anche in users per coerenza
-                                        await db.collection('users').doc(userId).set({
-                                            email: userEmail,
-                                            role: 'owner',
-                                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                                        });
-                                        
-                                        console.log('✅ Owner creato con successo!');
-                                    } else {
-                                        console.log('⛔ Non autorizzato');
-                                        alert('Non sei autorizzato ad accedere. Contatta il proprietario per essere invitato.');
-                                        await auth.signOut();
-                                    }
-                                } else {
-                                    console.log('✅ Utente autorizzato trovato!');
-                                }
-                            } catch (error) {
-                                console.error('❌ Errore durante la verifica:', error);
-                                alert('Errore durante la verifica delle autorizzazioni: ' + error.message);
-                            }
-                        } else {
-                            console.log('ℹ️ Nessun redirect result (normale al primo caricamento)');
-                        }
-                    })
-                    .catch((error) => {
-                        console.error('❌ Errore redirect:', error);
-                        if (error.code !== 'auth/popup-closed-by-user') {
-                            alert('Errore durante il login: ' + error.message);
-                        }
-                    });
-
                 const unsubscribe = auth.onAuthStateChanged((user) => {
                     console.log('👤 Auth state changed:', user ? user.email : 'non loggato');
                     setUser(user);
@@ -237,12 +173,65 @@
 
             const signInWithGoogle = async () => {
                 const provider = new firebase.auth.GoogleAuthProvider();
+                console.log('🔐 Avvio login con Google...');
+                
                 try {
-                    // Usa redirect invece di popup (funziona meglio su GitHub Pages)
-                    await auth.signInWithRedirect(provider);
+                    const result = await auth.signInWithPopup(provider);
+                    console.log('✅ Login completato:', result.user.email);
+                    
+                    const userEmail = result.user.email;
+                    const userId = result.user.uid;
+
+                    // Verifica se l'utente è già autorizzato
+                    console.log('🔍 Cerco utente in authorizedUsers...');
+                    const authSnapshot = await db.collection('authorizedUsers')
+                        .where('email', '==', userEmail)
+                        .get();
+
+                    if (authSnapshot.empty) {
+                        console.log('❌ Utente non trovato in authorizedUsers');
+                        
+                        // Controlla se è il primo utente
+                        console.log('🔍 Verifico se è il primo utente...');
+                        const allAuthUsers = await db.collection('authorizedUsers').limit(1).get();
+                        
+                        if (allAuthUsers.empty) {
+                            console.log('✨ Primo utente! Creazione owner...');
+                            
+                            // Crea il documento in authorizedUsers
+                            await db.collection('authorizedUsers').add({
+                                email: userEmail,
+                                userId: userId,
+                                role: 'owner',
+                                addedAt: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                            
+                            // Crea anche in users per coerenza
+                            await db.collection('users').doc(userId).set({
+                                email: userEmail,
+                                role: 'owner',
+                                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                            
+                            console.log('✅ Owner creato con successo!');
+                        } else {
+                            console.log('⛔ Non autorizzato');
+                            alert('Non sei autorizzato ad accedere. Contatta il proprietario per essere invitato.');
+                            await auth.signOut();
+                        }
+                    } else {
+                        console.log('✅ Utente autorizzato trovato!');
+                    }
                 } catch (error) {
-                    console.error('Errore login:', error);
-                    alert('Errore durante il login. Verifica le credenziali Firebase.');
+                    console.error('❌ Errore login:', error);
+                    // Gestisci l'errore CORS in modo silenzioso se è solo un problema di popup
+                    if (error.code === 'auth/popup-closed-by-user') {
+                        console.log('ℹ️ Popup chiuso dall\'utente');
+                    } else if (error.code === 'auth/cancelled-popup-request') {
+                        console.log('ℹ️ Richiesta popup cancellata');
+                    } else {
+                        alert('Errore durante il login: ' + error.message);
+                    }
                 }
             };
 
