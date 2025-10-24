@@ -149,43 +149,68 @@
                 auth.getRedirectResult()
                     .then(async (result) => {
                         if (result && result.user) {
-                            // Verifica se l'utente è autorizzato
+                            console.log('✅ Login completato:', result.user.email);
                             const userEmail = result.user.email;
-                            const authSnapshot = await db.collection('authorizedUsers')
-                                .where('email', '==', userEmail)
-                                .get();
+                            const userId = result.user.uid;
 
-                            if (authSnapshot.empty) {
-                                // Se non è nella lista, controlla se è il primo utente (owner)
-                                const usersSnapshot = await db.collection('users').get();
-                                if (usersSnapshot.empty) {
-                                    // Primo utente, diventa owner
-                                    await db.collection('users').doc(result.user.uid).set({
-                                        email: userEmail,
-                                        role: 'owner',
-                                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                                    });
-                                    await db.collection('authorizedUsers').add({
-                                        email: userEmail,
-                                        role: 'owner',
-                                        addedAt: firebase.firestore.FieldValue.serverTimestamp()
-                                    });
+                            try {
+                                // Verifica se l'utente è già autorizzato
+                                console.log('🔍 Cerco utente in authorizedUsers...');
+                                const authSnapshot = await db.collection('authorizedUsers')
+                                    .where('email', '==', userEmail)
+                                    .get();
+
+                                if (authSnapshot.empty) {
+                                    console.log('❌ Utente non trovato in authorizedUsers');
+                                    
+                                    // Controlla se è il primo utente
+                                    console.log('🔍 Verifico se è il primo utente...');
+                                    const allAuthUsers = await db.collection('authorizedUsers').limit(1).get();
+                                    
+                                    if (allAuthUsers.empty) {
+                                        console.log('✨ Primo utente! Creazione owner...');
+                                        
+                                        // Crea il documento in authorizedUsers
+                                        await db.collection('authorizedUsers').add({
+                                            email: userEmail,
+                                            userId: userId,
+                                            role: 'owner',
+                                            addedAt: firebase.firestore.FieldValue.serverTimestamp()
+                                        });
+                                        
+                                        // Crea anche in users per coerenza
+                                        await db.collection('users').doc(userId).set({
+                                            email: userEmail,
+                                            role: 'owner',
+                                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                                        });
+                                        
+                                        console.log('✅ Owner creato con successo!');
+                                    } else {
+                                        console.log('⛔ Non autorizzato');
+                                        alert('Non sei autorizzato ad accedere. Contatta il proprietario per essere invitato.');
+                                        await auth.signOut();
+                                    }
                                 } else {
-                                    // Non autorizzato
-                                    alert('Non sei autorizzato ad accedere. Contatta il proprietario per essere invitato.');
-                                    await auth.signOut();
+                                    console.log('✅ Utente autorizzato trovato!');
                                 }
+                            } catch (error) {
+                                console.error('❌ Errore durante la verifica:', error);
+                                alert('Errore durante la verifica delle autorizzazioni: ' + error.message);
                             }
+                        } else {
+                            console.log('ℹ️ Nessun redirect result (normale al primo caricamento)');
                         }
                     })
                     .catch((error) => {
-                        console.error('Errore redirect:', error);
+                        console.error('❌ Errore redirect:', error);
                         if (error.code !== 'auth/popup-closed-by-user') {
-                            alert('Errore durante il login. Verifica le credenziali Firebase.');
+                            alert('Errore durante il login: ' + error.message);
                         }
                     });
 
                 const unsubscribe = auth.onAuthStateChanged((user) => {
+                    console.log('👤 Auth state changed:', user ? user.email : 'non loggato');
                     setUser(user);
                     setLoading(false);
                     if (user) {
@@ -752,6 +777,7 @@
                                     className="bg-white/20 backdrop-blur text-white px-3 py-1 rounded-lg hover:bg-white/30 transition"
                                 >
                                     ➕ Proprietà
+                                </button>
                                 </button>
                                 <button
                                     onClick={() => setShowInviteUser(true)}
